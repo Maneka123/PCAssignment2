@@ -1,0 +1,202 @@
+#include <stdio.h>
+#include <math.h>
+#include <stdbool.h>
+#include <omp.h>
+
+// Define matrix-vector multiplication function with transpose
+void matrix_vector_multiply_transpose(double X[][3], double X_T[][5], double w[], double res[], int m, int n) {
+    // Calculate the transpose of matrix X (X_T)
+    #pragma omp parallel for simd
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < m; j++) {
+             
+            X_T[i][j] = X[j][i];
+        }
+    }
+
+    // Initialize the result vector res to 0
+    #pragma omp parallel for simd
+    for (int i = 0; i < m; i++) {
+            
+        res[i] = 0;
+    }
+
+    // Parallelized matrix-vector multiplication with transpose (X_T)
+    #pragma omp parallel for simd collapse(2)
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < n; j++) {
+            #pragma omp atomic
+            res[i] += X_T[j][i] * w[j];
+        }
+    }
+}
+
+
+// Define the Sigmoid function
+double sigmoid(double x) {
+    return 1.0 / (1.0 + exp(-x));
+}
+
+// Apply the Sigmoid function element-wise to a vector in parallel
+void apply_sigmoid_parallel(double res[], double ypred[], int m) {
+    #pragma omp parallel for simd
+    for (int i = 0; i < m; i++) {
+
+        ypred[i] = sigmoid(res[i]);
+    }
+}
+
+// Define matrix column-wise sum function
+void matrix_col_sum(double X[5][3], int m, int n, double res[]) {
+    #pragma omp parallel for simd
+    for (int j = 0; j < n; j++) {
+        res[j] = 0;
+    }
+
+    #pragma omp parallel for simd collapse(2)
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < m; i++) {
+#pragma omp atomic
+            res[j] += X[i][j];
+        }
+    }
+}
+
+// Define element-wise vector subtraction function
+void subtract_vectors_parallel(double vec1[], double res2[], int m) {
+    #pragma omp parallel for simd
+    for (int i = 0; i < m; i++) {
+#pragma omp atomic
+        res2[i] -= vec1[i];
+    }
+}
+
+// Calculate the norm of a vector in parallel
+double calculate_vector_norm_parallel(double v[], int n) {
+    double v_norm = 0.0;
+
+    #pragma omp parallel for simd  reduction(+:v_norm)
+    for (int i = 0; i < n; i++) {
+        v_norm += v[i] * v[i];
+    }
+
+    v_norm = sqrt(v_norm);
+
+    return v_norm;
+}
+
+int main() {
+    double tstart, tstop, tcalc;
+    tstart = omp_get_wtime();
+    int n = 3;// Number of features (adjust based on your data)
+    int m = 5;// Number of data points (adjust based on your data)
+
+    double alpha, epsilon;
+
+    // Load and preprocess your dataset (X and Y)
+    printf("Loading and preprocessing dataset...\n");
+
+    // Replace this section with actual dataset loading and preprocessing
+
+    // Initialize weights and hyperparameters
+    printf("Initializing weights and hyperparameters...\n");
+    // Hardcoded values for X, Y, and w
+    double X[5][3] = {
+        {1.0, 2.0, 3.0},
+        {4.0, 5.0, 6.0},
+        {7.0, 8.0, 9.0},
+        {10.0, 11.0, 12.0},
+        {13.0, 14.0, 15.0}
+    };
+
+    double Y[5] = {0.0, 1.0, 0.0, 1.0, 1.0};
+
+    double w[3] = {0.1, 0.2, 0.3}; // Initial weights
+    double w_star[3]; // Updated weight vector w*
+    alpha = 0.05;  // Learning rate
+    epsilon = 0.001; // Tolerance
+
+    // ∇Loss ← w
+    double gradient[n];
+    for (int i = 0; i < n; i++) {
+        gradient[i] = w[i];
+    }
+
+    double epsilon_sq = epsilon * epsilon;
+    int iteration = 0;
+    int max_iterations = 1000;
+
+    // Create arrays for X_T, res, gradient_update
+    double X_T[3][5]; // Transpose of X (adjust dimensions)
+    double res[5]; // Result vector (adjust dimensions)
+    double gradient_update[5]; // Gradient update vector (adjust dimensions)
+
+    while (true) {
+        // res ← Row vector of shape 1×m filled with 0
+        #pragma omp parallel for
+        for (int i = 0; i < m; i++) {
+            res[i] = 0;
+        }
+
+        // vector matrix mul(w, X.T)
+        matrix_vector_multiply_transpose(X, X_T, w, res, m, n);
+
+        // matrix col sum(X, res)
+        matrix_col_sum(X, m, n, res);
+
+        // sigmoid(res)
+        apply_sigmoid_parallel(res, res, m);
+
+        // Subtract(Y, res)
+        subtract_vectors_parallel(Y, res, m);
+
+        // vector matrix mul(res, X)
+        matrix_vector_multiply_transpose(X, X_T, res, gradient_update, m, n);
+
+        // matrix col sum(X, ∇Loss)
+        matrix_col_sum(X, m, n, gradient);
+
+        // Subtract(α ∗ ∇Loss, w)
+        #pragma omp parallel for
+        for (int i = 0; i < n; i++) {
+            w[i] -= alpha * gradient[i];
+        }
+
+        // Calculate the gradient norm
+        double grad_norm = calculate_vector_norm_parallel(gradient, n);
+
+        // if p(grad norm) ≤ ϵ then
+        if (grad_norm * grad_norm <= epsilon_sq) {
+            // Set w* to the current value of w
+            for (int i = 0; i < n; i++) {
+                w_star[i] = w[i];
+            }
+
+           
+
+       
+            break;
+        }
+
+        // Optional: Check for a maximum number of iterations
+        if (iteration >= max_iterations) {
+            // Maximum iterations reached, exit the loop
+            break;
+        }
+
+        iteration++;
+    }
+
+    // Print the updated weight vector w∗ after the loop
+    printf("Updated Weight Vector (w∗):\n");
+    for (int i = 0; i < n; i++) {
+        printf("%lf ", w_star[i]);
+    }
+    printf("\n");
+
+    tstop = omp_get_wtime();
+    tcalc = tstop - tstart;
+    printf("The time taken to run the code is: %.3f seconds\n", tcalc);
+
+    return 0;
+}
